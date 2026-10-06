@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from flask import (Flask, Response, abort, jsonify, make_response, redirect,
                    render_template, request, send_from_directory)
 from markupsafe import escape
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import api_sources
 import swiftscan
@@ -27,6 +28,18 @@ swiftscan_logging.setup_logging()
 
 app = Flask(__name__, template_folder="templates")
 logger = logging.getLogger("swiftscan.web")
+
+
+def _trust_proxy():
+    # Render sets RENDER=true automatically; SWIFTSCAN_TRUST_PROXY is a manual opt-in for other hosts.
+    return bool(os.environ.get("RENDER")) or os.environ.get(
+        "SWIFTSCAN_TRUST_PROXY", "").strip().lower() in ("1", "true", "yes")
+
+
+if _trust_proxy():
+    # Use the X-Forwarded-* headers set by the single proxy in front of us,
+    # so request.host / request.is_secure / request.remote_addr reflect the real client.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # One scan at a time (per process).
 scan_semaphore = threading.Semaphore(1)
@@ -140,6 +153,9 @@ def guard():
 
     # Block other websites from driving this app through the user's browser.
     if (_wants_json() or (request.path == "/login" and request.method == "POST")) and _is_cross_site():
+        logger.warning("cross_site denied: path=%s sec_fetch_site=%r origin=%r host=%r",
+                       request.path, request.headers.get("Sec-Fetch-Site"),
+                       request.headers.get("Origin"), request.host)
         audit("access_denied", reason="cross_site", client_ip=request.remote_addr, path=request.path)
         return _deny(403, "Cross-site requests are not allowed.")
 
