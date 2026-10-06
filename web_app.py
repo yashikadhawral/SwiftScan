@@ -110,8 +110,12 @@ def _is_authenticated():
 def _is_cross_site():
     """True if the browser says this request was triggered by another site."""
     fetch_site = request.headers.get("Sec-Fetch-Site")
-    if fetch_site and fetch_site not in ("same-origin", "none"):
-        return True
+    if fetch_site:
+        # Set by the browser and cannot be forged by a web page, so when it is
+        # present it is authoritative. (Origin can be "null" on a same-origin form POST
+        # because of our Referrer-Policy: no-referrer, so we must not rely on it here.)
+        return fetch_site not in ("same-origin", "none")
+    # Older browsers without Sec-Fetch-*: fall back to comparing Origin with our host.
     origin = request.headers.get("Origin")
     if origin is not None:
         return origin == "null" or urlsplit(origin).netloc != request.host
